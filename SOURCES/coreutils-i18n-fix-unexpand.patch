@@ -1,0 +1,28 @@
+From 02424bfcd719bbaa695f4e1c3ef17ad91b0d23c0 Mon Sep 17 00:00:00 2001
+From: Lubomir Rintel <lkundrak@v3.sk>
+Date: Thu, 28 Jan 2016 20:57:22 +0100
+Subject: [PATCH] unexpand: fix blank line handling
+
+  echo '' |./src/unexpand -a
+
+Really?
+---
+ src/unexpand.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/unexpand.c b/src/unexpand.c
+index 569a7ee..3bbbd66 100644
+--- a/src/unexpand.c
++++ b/src/unexpand.c
+@@ -233,7 +233,7 @@ unexpand (void)
+                   next_tab_column = column;
+                   tab_index -= !!tab_index;
+                 }
+-              else
++              else if (!mb_iseq (c, '\n'))
+                 {
+                   column += mb_width (c);
+                   if (!column)
+-- 
+2.7.4
+

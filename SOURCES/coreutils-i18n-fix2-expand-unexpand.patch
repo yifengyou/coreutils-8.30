@@ -1,0 +1,108 @@
+diff --git a/src/expand.c b/src/expand.c
+index 380e020..310b349 100644
+--- a/src/expand.c
++++ b/src/expand.c
+@@ -129,15 +129,19 @@ expand (void)
+ 
+       do
+         {
+-          do {
++          while (true) {
+             mbf_getc (c, mbf);
+-            if (mb_iseof (c))
++            if ((mb_iseof (c)) && (fp = next_file (fp)))
+               {
+-                mbf_init (mbf, fp = next_file (fp));
++                mbf_init (mbf, fp);
+                 continue;
+               }
++            else
++              {
++                break;
++              }
+             }
+-          while (false);
++
+ 
+           if (convert)
+             {
+diff --git a/src/unexpand.c b/src/unexpand.c
+index 3bbbd66..863a90a 100644
+--- a/src/unexpand.c
++++ b/src/unexpand.c
+@@ -164,15 +164,19 @@ unexpand (void)
+ 
+       do
+         {
+-          do {
++          while (true) {
+             mbf_getc (c, mbf);
+-            if (mb_iseof (c))
++            if ((mb_iseof (c)) && (fp = next_file (fp)))
+               {
+-                mbf_init (mbf, fp = next_file (fp));
++                mbf_init (mbf, fp);
+                 continue;
+               }
++            else
++              {
++                break;
++              }
+             }
+-          while (false);
++
+ 
+           if (convert)
+             {
+diff --git a/tests/expand/mb.sh b/tests/expand/mb.sh
+index 7971e18..031be7a 100755
+--- a/tests/expand/mb.sh
++++ b/tests/expand/mb.sh
+@@ -44,6 +44,20 @@ EOF
+ expand < in > out || fail=1
+ compare exp out > /dev/null 2>&1 || fail=1
+ 
++#multiple files as an input
++cat <<\EOF >> exp || framework_failure_
++1234567812345678123456781
++.       .       .       .
++a       b       c       d
++.       .       .       .
++ä       ö       ü       ß
++.       .       .       .
++   äöü  .    öüä.       ä xx
++EOF
++
++expand ./in ./in > out || fail=1
++compare exp out > /dev/null 2>&1 || fail=1
++
+ #test characters with display widths != 1
+ env printf '12345678
+ e\t|ascii(1)
+diff --git a/tests/unexpand/mb.sh b/tests/unexpand/mb.sh
+index 60d4c1a..8d75652 100755
+--- a/tests/unexpand/mb.sh
++++ b/tests/unexpand/mb.sh
+@@ -44,6 +44,22 @@ EOF
+ unexpand -a < in > out || fail=1
+ compare exp out > /dev/null 2>&1 || fail=1
+ 
++
++#multiple files as an input
++cat >> exp <<\EOF
++1234567812345678123456781
++.	.	.	.
++a	b	c	d
++.	.	.	.
++ä	ö	ü	ß
++.	.	.	.
++   äöü	.    öüä.	ä xx
++EOF
++
++
++unexpand -a ./in ./in > out || fail=1
++compare exp out > /dev/null 2>&1 || fail=1
++
+ #test characters with a display width larger than 1
+ 
+ env printf '12345678

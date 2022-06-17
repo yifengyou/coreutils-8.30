@@ -1,0 +1,74 @@
+From b60a61d7e5f6504518095d9ee8c7c8b185bedb23 Mon Sep 17 00:00:00 2001
+From: Marc Dionne <marc.dionne@auristor.com>
+Date: Wed, 5 Feb 2020 13:35:12 -0800
+Subject: [PATCH 1/2] mountlist: Consider AFS filesystems as remote
+
+df --local relies on the ME_REMOTE macro to determine if a given
+mount entry should be considered "local".  There is special logic
+for nfs and smb/cifs mounts, but /afs as mounted by OpenAFS, the
+kernel's kafs module or AuriStorFS is treated as a local mount.
+* lib/mountlist.c (ME_REMOTE): Treat mounts of type 'afs'
+(OpenAFS, kernel kafs) and 'auristorfs' (AuriStorFS) as remote.
+
+Copyright-paperwork-exempt: yes
+
+Upstream-commit: 7a15069b68a376f26c5dca34ae2689c5bf8adc99
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ lib/mountlist.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/lib/mountlist.c b/lib/mountlist.c
+index b691f38..1b1e5e4 100644
+--- a/lib/mountlist.c
++++ b/lib/mountlist.c
+@@ -224,6 +224,7 @@ me_remote (char const *fs_name, char const *fs_type _GL_UNUSED)
+ #ifndef ME_REMOTE
+ /* A file system is "remote" if its Fs_name contains a ':'
+    or if (it is of type (smbfs or cifs) and its Fs_name starts with '//')
++   or if it is of type (afs or auristorfs)
+    or Fs_name is equal to "-hosts" (used by autofs to mount remote fs).  */
+ # define ME_REMOTE(Fs_name, Fs_type)            \
+     (strchr (Fs_name, ':') != NULL              \
+@@ -231,6 +232,8 @@ me_remote (char const *fs_name, char const *fs_type _GL_UNUSED)
+          && (Fs_name)[1] == '/'                 \
+          && (strcmp (Fs_type, "smbfs") == 0     \
+              || strcmp (Fs_type, "cifs") == 0)) \
++     || strcmp (Fs_type, "afs") == 0            \
++     || strcmp (Fs_type, "auristorfs") == 0     \
+      || (strcmp("-hosts", Fs_name) == 0))
+ #endif
+ 
+-- 
+2.21.1
+
+
+From 41010dfb0cc100f41fb16d93f9fa36dc07e63ac6 Mon Sep 17 00:00:00 2001
+From: Kenneth D'souza <kdsouza@redhat.com>
+Date: Sat, 8 Feb 2020 13:54:35 +0000
+Subject: [PATCH 2/2] mountlist: consider smb3 file systems as remote
+
+* lib/mountlist.c (ME_REMOTE): Recognize file systems of type
+"smb3" as remote.
+
+Upstream-commit: 4d4a22ab1f719b7c6c3fe3dbf45d11baafd3c563
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ lib/mountlist.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/lib/mountlist.c b/lib/mountlist.c
+index 1b1e5e4..8ad74a2 100644
+--- a/lib/mountlist.c
++++ b/lib/mountlist.c
+@@ -231,6 +231,7 @@ me_remote (char const *fs_name, char const *fs_type _GL_UNUSED)
+      || ((Fs_name)[0] == '/'                    \
+          && (Fs_name)[1] == '/'                 \
+          && (strcmp (Fs_type, "smbfs") == 0     \
++             || strcmp (Fs_type, "smb3") == 0   \
+              || strcmp (Fs_type, "cifs") == 0)) \
+      || strcmp (Fs_type, "afs") == 0            \
+      || strcmp (Fs_type, "auristorfs") == 0     \
+-- 
+2.21.1
+

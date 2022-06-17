@@ -1,0 +1,469 @@
+From 95f427178720d047316e95f44777cfdf2ecf2b46 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?P=C3=A1draig=20Brady?= <P@draigBrady.com>
+Date: Fri, 4 Jan 2019 09:29:13 -0800
+Subject: [PATCH 1/4] tail: don't exit immediately with filters on AIX
+
+* src/tail.c: Fix the check_output_available check on AIX.
+Note we don't use poll for all systems as the overhead
+of adding the gnulib poll module wouldn't be worth it
+just for this single use.
+* tests/tail-2/pipe-f.sh: Fix the test which always passed
+due to only the exit code of sleep being checked.
+* NEWS: Mention the bug fix and rearrange alphabetically.
+Fixes http://bugs.gnu.org/33946
+
+Upstream-commit: d5ab4cbe424e3e95140eec22ef828f50b2fb3067
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ src/tail.c             | 13 +++++++++++++
+ tests/tail-2/pipe-f.sh |  5 ++++-
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/src/tail.c b/src/tail.c
+index ac001d7..d63aacc 100644
+--- a/src/tail.c
++++ b/src/tail.c
+@@ -30,6 +30,9 @@
+ #include <getopt.h>
+ #include <sys/types.h>
+ #include <signal.h>
++#ifdef _AIX
++# include <poll.h>
++#endif
+ 
+ #include "system.h"
+ #include "argmatch.h"
+@@ -335,6 +338,16 @@ named file in a way that accommodates renaming, removal and creation.\n\
+ static void
+ check_output_alive (void)
+ {
++#ifdef _AIX
++  /* select on AIX was seen to give a readable event immediately.  */
++  struct pollfd pfd;
++  pfd.fd = STDOUT_FILENO;
++  pfd.events = POLLERR;
++
++  if (poll (&pfd, 1, 0) >= 0 && (pfd.revents & POLLERR))
++    raise (SIGPIPE);
++#endif
++
+   if (! monitor_output)
+     return;
+ 
+diff --git a/tests/tail-2/pipe-f.sh b/tests/tail-2/pipe-f.sh
+index 76b0d90..1126c93 100755
+--- a/tests/tail-2/pipe-f.sh
++++ b/tests/tail-2/pipe-f.sh
+@@ -37,7 +37,10 @@ compare exp out || fail=1
+ 
+ # This would wait indefinitely before v8.28 due to no EPIPE being
+ # generated due to no data written after the first small amount
+-timeout 10 tail -f $mode $fastpoll out | sleep .1 || fail=1
++(returns_ 124 timeout 10 tail -n2 -f $mode $fastpoll out && touch timed_out) |
++ sed 2q > out2
++test -e timed_out && fail=1
++compare exp out2 || fail=1
+ 
+ # This would wait indefinitely before v8.28 (until first write)
+ (returns_ 1 timeout 10 tail -f $mode $fastpoll /dev/null >&-) || fail=1
+-- 
+2.31.1
+
+
+From 125bb79d3e9f414533b1c29237ee3f647053d0d6 Mon Sep 17 00:00:00 2001
+From: Ayappan <ayappap2@in.ibm.com>
+Date: Sun, 20 Jan 2019 00:17:33 -0800
+Subject: [PATCH 2/4] tail: fix recent ineffective AIX change
+
+* src/tail.c: Fix commit v8.30-40-gd5ab4cb which was ineffective.
+Fixes http://bugs.gnu.org/33946
+
+Upstream-commit: 17983b2cb3bccbb4fa69691178caddd99269bda9
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ src/tail.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/tail.c b/src/tail.c
+index d63aacc..9ed6d48 100644
+--- a/src/tail.c
++++ b/src/tail.c
+@@ -338,6 +338,9 @@ named file in a way that accommodates renaming, removal and creation.\n\
+ static void
+ check_output_alive (void)
+ {
++  if (! monitor_output)
++    return;
++
+ #ifdef _AIX
+   /* select on AIX was seen to give a readable event immediately.  */
+   struct pollfd pfd;
+@@ -346,11 +349,7 @@ check_output_alive (void)
+ 
+   if (poll (&pfd, 1, 0) >= 0 && (pfd.revents & POLLERR))
+     raise (SIGPIPE);
+-#endif
+-
+-  if (! monitor_output)
+-    return;
+-
++#else
+   struct timeval delay;
+   delay.tv_sec = delay.tv_usec = 0;
+ 
+@@ -362,6 +361,7 @@ check_output_alive (void)
+      and implies an error condition on output like broken pipe.  */
+   if (select (STDOUT_FILENO + 1, &rfd, NULL, NULL, &delay) == 1)
+     raise (SIGPIPE);
++#endif
+ }
+ 
+ static bool
+-- 
+2.31.1
+
+
+From 7741989c3e633aa44f01d8f91332cb65a9280ba3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?P=C3=A1draig=20Brady?= <P@draigBrady.com>
+Date: Sun, 20 Jan 2019 00:13:15 -0800
+Subject: [PATCH 3/4] tail: fix handling of broken pipes with SIGPIPE ignored
+
+* init.cfg (trap_sigpipe_or_skip_): A new function refactored from...
+* tests/misc/printf-surprise.sh: ...here.
+* tests/misc/seq-epipe.sh. Likewise.
+* src/tail.c (die_pipe): Ensure we exit upon sending SIGPIPE.
+* tests/tail-2/pipe-f.sh: Ensure we exit even if SIGPIPE is ignored.
+* NEWS: Mention the bug fix.
+
+Upstream-commit: fa50623394f491b975dbd7ad73193519dd721771
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ init.cfg                      |  6 ++++++
+ src/tail.c                    | 14 +++++++++++---
+ tests/misc/printf-surprise.sh |  4 +---
+ tests/misc/seq-epipe.sh       |  4 +---
+ tests/tail-2/pipe-f.sh        | 19 ++++++++++++++-----
+ 5 files changed, 33 insertions(+), 14 deletions(-)
+
+diff --git a/init.cfg b/init.cfg
+index b6c81ab..985c8d3 100644
+--- a/init.cfg
++++ b/init.cfg
+@@ -613,6 +613,12 @@ mkfifo_or_skip_()
+   fi
+ }
+ 
++trap_sigpipe_or_skip_()
++{
++  (trap '' PIPE && yes | :) 2>&1 | grep -qF 'Broken pipe' ||
++    skip_ 'trapping SIGPIPE is not supported'
++}
++
+ # Disable the current test if the working directory seems to have
+ # the setgid bit set.
+ skip_if_setgid_()
+diff --git a/src/tail.c b/src/tail.c
+index 9ed6d48..16e0d73 100644
+--- a/src/tail.c
++++ b/src/tail.c
+@@ -333,6 +333,14 @@ named file in a way that accommodates renaming, removal and creation.\n\
+   exit (status);
+ }
+ 
++/* Ensure exit, either with SIGPIPE or EXIT_FAILURE status.  */
++static void ATTRIBUTE_NORETURN
++die_pipe (void)
++{
++  raise (SIGPIPE);
++  exit (EXIT_FAILURE);
++}
++
+ /* If the output has gone away, then terminate
+    as we would if we had written to this output.  */
+ static void
+@@ -348,7 +356,7 @@ check_output_alive (void)
+   pfd.events = POLLERR;
+ 
+   if (poll (&pfd, 1, 0) >= 0 && (pfd.revents & POLLERR))
+-    raise (SIGPIPE);
++    die_pipe ();
+ #else
+   struct timeval delay;
+   delay.tv_sec = delay.tv_usec = 0;
+@@ -360,7 +368,7 @@ check_output_alive (void)
+   /* readable event on STDOUT is equivalent to POLLERR,
+      and implies an error condition on output like broken pipe.  */
+   if (select (STDOUT_FILENO + 1, &rfd, NULL, NULL, &delay) == 1)
+-    raise (SIGPIPE);
++    die_pipe ();
+ #endif
+ }
+ 
+@@ -1658,7 +1666,7 @@ tail_forever_inotify (int wd, struct File_spec *f, size_t n_files,
+              {
+                /* readable event on STDOUT is equivalent to POLLERR,
+                   and implies an error on output like broken pipe.  */
+-               raise (SIGPIPE);
++               die_pipe ();
+              }
+            else
+              break;
+diff --git a/tests/misc/printf-surprise.sh b/tests/misc/printf-surprise.sh
+index fd88133..acac0b1 100755
+--- a/tests/misc/printf-surprise.sh
++++ b/tests/misc/printf-surprise.sh
+@@ -49,9 +49,7 @@ vm=$(get_min_ulimit_v_ env $prog %20f 0) \
+ # triggering the printf(3) misbehavior -- which, btw, is required by ISO C99.
+ 
+ mkfifo_or_skip_ fifo
+-
+-(trap '' PIPE && yes | :) 2>&1 | grep -qF 'Broken pipe' ||
+-    skip_ 'trapping SIGPIPE is not supported'
++trap_sigpipe_or_skip_
+ 
+ # Disable MALLOC_PERTURB_, to avoid triggering this bug
+ # https://bugs.debian.org/481543#77
+diff --git a/tests/misc/seq-epipe.sh b/tests/misc/seq-epipe.sh
+index 3e89158..127d61c 100755
+--- a/tests/misc/seq-epipe.sh
++++ b/tests/misc/seq-epipe.sh
+@@ -18,9 +18,7 @@
+ 
+ . "${srcdir=.}/tests/init.sh"; path_prepend_ ./src
+ print_ver_ seq
+-
+-(trap '' PIPE && yes | :) 2>&1 | grep -qF 'Broken pipe' ||
+-    skip_ 'trapping SIGPIPE is not supported'
++trap_sigpipe_or_skip_
+ 
+ # upon EPIPE with signals ignored, 'seq' should exit with an error.
+ timeout 10 sh -c \
+diff --git a/tests/tail-2/pipe-f.sh b/tests/tail-2/pipe-f.sh
+index 1126c93..f734a61 100755
+--- a/tests/tail-2/pipe-f.sh
++++ b/tests/tail-2/pipe-f.sh
+@@ -18,6 +18,7 @@
+ 
+ . "${srcdir=.}/tests/init.sh"; path_prepend_ ./src
+ print_ver_ tail
++trap_sigpipe_or_skip_
+ 
+ # Speedup the non inotify case
+ fastpoll='-s.1 --max-unchanged-stats=1'
+@@ -36,11 +37,19 @@ echo bar | returns_ 1 \
+ compare exp out || fail=1
+ 
+ # This would wait indefinitely before v8.28 due to no EPIPE being
+-# generated due to no data written after the first small amount
+-(returns_ 124 timeout 10 tail -n2 -f $mode $fastpoll out && touch timed_out) |
+- sed 2q > out2
+-test -e timed_out && fail=1
+-compare exp out2 || fail=1
++# generated due to no data written after the first small amount.
++# Also check tail exits if SIGPIPE is being ignored.
++# Note 'trap - SIGPIPE' is ineffective if the initiating shell
++# has ignored SIGPIPE, but that's not the normal case.
++for disposition in '' '-'; do
++  (trap "$disposition" PIPE;
++   returns_ 124 timeout 10 \
++    tail -n2 -f $mode $fastpoll out && touch timed_out) |
++  sed 2q > out2
++  test -e timed_out && fail=1
++  compare exp out2 || fail=1
++  rm -f timed_out
++done
+ 
+ # This would wait indefinitely before v8.28 (until first write)
+ (returns_ 1 timeout 10 tail -f $mode $fastpoll /dev/null >&-) || fail=1
+-- 
+2.31.1
+
+
+From 0f5760466d167e955d28a1250ffd0af347d48dc9 Mon Sep 17 00:00:00 2001
+From: Paul Eggert <eggert@cs.ucla.edu>
+Date: Sat, 26 Jun 2021 18:23:52 -0700
+Subject: [PATCH 4/4] tail: use poll, not select
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This fixes an unlikely stack out-of-bounds write reported by
+Stepan Broz via Kamil Dudka (Bug#49209).
+* src/tail.c: Do not include <sys/select.h>.
+[!_AIX]: Include poll.h.
+(check_output_alive) [!_AIX]: Use poll instead of select.
+(tail_forever_inotify): Likewise.  Simplify logic, as there is no
+need for a ‘while (len <= evbuf_off)’ loop.
+
+Upstream-commit: da0d448bca62c6305fc432f67e2c5ccc2da75346
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ src/tail.c | 101 +++++++++++++++++++++--------------------------------
+ 1 file changed, 39 insertions(+), 62 deletions(-)
+
+diff --git a/src/tail.c b/src/tail.c
+index 16e0d73..d77c660 100644
+--- a/src/tail.c
++++ b/src/tail.c
+@@ -29,10 +29,8 @@
+ #include <assert.h>
+ #include <getopt.h>
+ #include <sys/types.h>
++#include <poll.h>
+ #include <signal.h>
+-#ifdef _AIX
+-# include <poll.h>
+-#endif
+ 
+ #include "system.h"
+ #include "argmatch.h"
+@@ -55,8 +53,6 @@
+ #if HAVE_INOTIFY
+ # include "hash.h"
+ # include <sys/inotify.h>
+-/* 'select' is used by tail_forever_inotify.  */
+-# include <sys/select.h>
+ 
+ /* inotify needs to know if a file is local.  */
+ # include "fs.h"
+@@ -349,27 +345,12 @@ check_output_alive (void)
+   if (! monitor_output)
+     return;
+ 
+-#ifdef _AIX
+-  /* select on AIX was seen to give a readable event immediately.  */
+   struct pollfd pfd;
+   pfd.fd = STDOUT_FILENO;
+   pfd.events = POLLERR;
+ 
+   if (poll (&pfd, 1, 0) >= 0 && (pfd.revents & POLLERR))
+     die_pipe ();
+-#else
+-  struct timeval delay;
+-  delay.tv_sec = delay.tv_usec = 0;
+-
+-  fd_set rfd;
+-  FD_ZERO (&rfd);
+-  FD_SET (STDOUT_FILENO, &rfd);
+-
+-  /* readable event on STDOUT is equivalent to POLLERR,
+-     and implies an error condition on output like broken pipe.  */
+-  if (select (STDOUT_FILENO + 1, &rfd, NULL, NULL, &delay) == 1)
+-    die_pipe ();
+-#endif
+ }
+ 
+ static bool
+@@ -1609,7 +1590,7 @@ tail_forever_inotify (int wd, struct File_spec *f, size_t n_files,
+   /* Wait for inotify events and handle them.  Events on directories
+      ensure that watched files can be re-added when following by name.
+      This loop blocks on the 'safe_read' call until a new event is notified.
+-     But when --pid=P is specified, tail usually waits via the select.  */
++     But when --pid=P is specified, tail usually waits via poll.  */
+   while (1)
+     {
+       struct File_spec *fspec;
+@@ -1626,54 +1607,51 @@ tail_forever_inotify (int wd, struct File_spec *f, size_t n_files,
+           return false;
+         }
+ 
+-      /* When watching a PID, ensure that a read from WD will not block
+-         indefinitely.  */
+-      while (len <= evbuf_off)
++      if (len <= evbuf_off)
+         {
+-          struct timeval delay; /* how long to wait for file changes.  */
++          /* Poll for inotify events.  When watching a PID, ensure
++             that a read from WD will not block indefinitely.
++             If MONITOR_OUTPUT, also poll for a broken output pipe.  */
+ 
+-          if (pid)
++          int file_change;
++          struct pollfd pfd[2];
++          do
+             {
+-              if (writer_is_dead)
+-                exit (EXIT_SUCCESS);
++              /* How many ms to wait for changes.  -1 means wait forever.  */
++              int delay = -1;
+ 
+-              writer_is_dead = (kill (pid, 0) != 0 && errno != EPERM);
+-
+-              if (writer_is_dead)
+-                delay.tv_sec = delay.tv_usec = 0;
+-              else
++              if (pid)
+                 {
+-                  delay.tv_sec = (time_t) sleep_interval;
+-                  delay.tv_usec = 1000000 * (sleep_interval - delay.tv_sec);
++                  if (writer_is_dead)
++                    exit (EXIT_SUCCESS);
++
++                  writer_is_dead = (kill (pid, 0) != 0 && errno != EPERM);
++
++                  if (writer_is_dead || sleep_interval <= 0)
++                    delay = 0;
++                  else if (sleep_interval < INT_MAX / 1000 - 1)
++                    {
++                      /* delay = ceil (sleep_interval * 1000), sans libm.  */
++                      double ddelay = sleep_interval * 1000;
++                      delay = ddelay;
++                      delay += delay < ddelay;
++                    }
+                 }
++
++              pfd[0].fd = wd;
++              pfd[0].events = POLLIN;
++              pfd[1].fd = STDOUT_FILENO;
++              pfd[1].events = pfd[1].revents = 0;
++              file_change = poll (pfd, monitor_output + 1, delay);
+             }
++          while (file_change == 0);
+ 
+-           fd_set rfd;
+-           FD_ZERO (&rfd);
+-           FD_SET (wd, &rfd);
+-           if (monitor_output)
+-             FD_SET (STDOUT_FILENO, &rfd);
+-
+-           int file_change = select (MAX (wd, STDOUT_FILENO) + 1,
+-                                     &rfd, NULL, NULL, pid ? &delay: NULL);
+-
+-           if (file_change == 0)
+-             continue;
+-           else if (file_change == -1)
+-             die (EXIT_FAILURE, errno,
+-                  _("error waiting for inotify and output events"));
+-           else if (FD_ISSET (STDOUT_FILENO, &rfd))
+-             {
+-               /* readable event on STDOUT is equivalent to POLLERR,
+-                  and implies an error on output like broken pipe.  */
+-               die_pipe ();
+-             }
+-           else
+-             break;
+-        }
++          if (file_change < 0)
++            die (EXIT_FAILURE, errno,
++                 _("error waiting for inotify and output events"));
++          if (pfd[1].revents)
++            die_pipe ();
+ 
+-      if (len <= evbuf_off)
+-        {
+           len = safe_read (wd, evbuf, evlen);
+           evbuf_off = 0;
+ 
+@@ -2434,8 +2412,7 @@ main (int argc, char **argv)
+   if (forever && ignore_fifo_and_pipe (F, n_files))
+     {
+       /* If stdout is a fifo or pipe, then monitor it
+-         so that we exit if the reader goes away.
+-         Note select() on a regular file is always readable.  */
++         so that we exit if the reader goes away.  */
+       struct stat out_stat;
+       if (fstat (STDOUT_FILENO, &out_stat) < 0)
+         die (EXIT_FAILURE, errno, _("standard output"));
+-- 
+2.31.1
+
